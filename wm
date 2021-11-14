@@ -1,1 +1,45 @@
-#! /user/bin/env bb
+#! /usr/bin/env bb
+
+(require '[babashka.curl :as http])
+(require '[babashka.deps :as deps])
+
+(deps/add-deps '{:deps {camel-snake-kebab/camel-snake-kebab
+                        {:mvn/version "0.4.2"}}})
+
+(require '[camel-snake-kebab.core :refer [->kebab-case-keyword]])
+
+(def location-endpoint "http://ip-api.com/json")
+(def weather-endpoint "https://api.openweathermap.org/data/2.5/onecall")
+
+(defn map->query-str
+  [m]
+  (->> m
+       (reduce (fn [params [k v]]
+                 (let [p (str/join "=" [(name k) v])]
+                   (conj params p)))
+               [])
+       (str/join "&")))
+
+(defn ->weather-url
+  [api-key location]
+  (let [query-str (-> location
+                      (select-keys [:lat :lon])
+                      (assoc :appid api-key)
+                      map->query-str)]
+    (str/join "?" [weather-endpoint query-str])))
+
+(defn get-json-body
+  [url]
+  (-> url
+      http/get
+      :body
+      (json/parse-string ->kebab-case-keyword)))
+
+(defn get-location
+  []
+  (get-json-body location-endpoint))
+
+(defn get-forecast
+  [api-key location]
+  (let [url (->weather-url api-key location)]
+    (get-json-body url)))
