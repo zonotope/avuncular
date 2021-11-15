@@ -63,3 +63,20 @@
   [api-key location]
   (let [url (->weather-url api-key location)]
     (get-json-body url)))
+
+(defn kelvin->celsius
+  [temp]
+  (- temp 273.15))
+
+(defn celsius->fahrenheit
+  [temp]
+  (-> temp
+      (* 9)
+      (/ 5)
+      (+ 32)))
+
+(defn kelvin->fahrenheit
+  [temp]
+  (-> temp
+      kelvin->celsius
+      celsius->fahrenheit))
