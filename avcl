@@ -8,7 +8,18 @@
 
 (require '[camel-snake-kebab.core :refer [->kebab-case-keyword]])
 
+(def config-base-dir
+  (or (System/getenv "XDG_CONFIG_HOME")
+      (str/join "/" [(System/getenv "HOME") ".config"])))
+
+(def config-path
+  (str/join "/" [config-base-dir "avuncular" "avcl.edn"]))
+
+(def config
+  (-> config-path slurp edn/read-string))
+
 (def location-endpoint "http://ip-api.com/json")
+
 (def weather-endpoint "https://api.openweathermap.org/data/2.5/onecall")
 
 (def icons
