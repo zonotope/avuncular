@@ -84,10 +84,35 @@
   (-> temp
       (* 9)
       (/ 5)
-      (+ 32)))
+      (+ 32)
+      Math/round))
 
 (defn kelvin->fahrenheit
   [temp]
   (-> temp
       kelvin->celsius
       celsius->fahrenheit))
+
+(defn colorize
+  [s color]
+  (format "<span color=\"%s\">%s</span>" color s))
+
+(defn format-fahrenheit
+  [temp]
+  (str temp "宅 "))
+
+(let [api-key  (:org.openweathermap/api-key config)
+      icon-color (:icon-color config)
+      location (get-location)
+      forecast (get-forecast api-key location)
+      icon-code (-> forecast :current :weather first :icon)
+      icon     (-> icons
+                   (get icon-code)
+                   (colorize icon-color))
+      temp-f   (-> forecast :current :temp kelvin->fahrenheit format-fahrenheit)
+      txt      (str/join " " [icon temp-f])
+      tltp     ""
+      cls      "weather"]
+  (-> {:text txt, :tooltip tltp, :class cls}
+      json/generate-string
+      println))
