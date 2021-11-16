@@ -66,11 +66,11 @@
       :body
       (json/parse-string ->kebab-case-keyword)))
 
-(defn get-location
+(defn query-location
   []
   (get-json-body location-endpoint))
 
-(defn get-forecasts
+(defn query-forecasts
   [api-key location]
   (let [url (->weather-url api-key location)]
     (get-json-body url)))
@@ -110,6 +110,8 @@
                    (get icon-code)
                    (colorize icon-color))
       temp-f   (-> forecasts :current :temp kelvin->fahrenheit format-fahrenheit)
+      location   (query-location)
+      forecasts  (query-forecasts api-key location)
       txt      (str/join " " [icon temp-f])
       tltp     ""
       cls      "weather"]
