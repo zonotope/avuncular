@@ -2,6 +2,8 @@
 
 (require '[babashka.curl :as http])
 (require '[babashka.deps :as deps])
+(import '(java.time Instant ZonedDateTime ZoneId))
+(import '(java.time.format DateTimeFormatter))
 
 (deps/add-deps '{:deps {camel-snake-kebab/camel-snake-kebab
                         {:mvn/version "0.4.2"}}})
@@ -101,27 +103,53 @@
   [temp]
   (str temp "宅 "))
 
+(defn get-fahrenheit
+  [forecast]
+  (-> forecast :temp kelvin->fahrenheit format-fahrenheit))
+
 (defn get-icon
   [forecast]
   (let [icon-code (-> forecast :weather first :icon)]
     (get icons icon-code)))
 
-(defn get-fahrenheit
-  [forecast]
-  (-> forecast :temp kelvin->fahrenheit format-fahrenheit))
+(defn get-time
+  [forecast tz]
+  (let [fmt (DateTimeFormatter/ofPattern "hh a")
+        t   (-> forecast
+                :dt
+                (* 1000)
+                Instant/ofEpochMilli
+                (ZonedDateTime/ofInstant tz))]
+    (.format t fmt)))
+
+(defn get-current-forecast
+  [forecasts icon-color]
+  (let [current (:current forecasts)
+        icon    (-> current
+                    get-icon
+                    (colorize icon-color))
+        temp-f  (get-fahrenheit current)]
+    (str/join " " [icon temp-f])))
+
+(defn get-hourly-forecasts
+  [forecasts n]
+  (let [timezone (-> forecasts :timezone ZoneId/of)]
+    (->> (:hourly forecasts)
+         (take n)
+         (map (fn [h]
+                (let [temp (get-fahrenheit h)
+                      icon (get-icon h)
+                      time (get-time h timezone)]
+                  (str/join " " [icon temp "|" time]))))
+         (str/join \newline))))
 
 (let [api-key    (:org.openweathermap/api-key config)
       icon-color (:icon-color config)
       location   (query-location)
-      forecasts  (query-forecasts api-key location)
-      current    (:current forecasts)
-      icon       (-> current
-                     get-icon
-                     (colorize icon-color))
-      temp-f   (get-fahrenheit current)
-      txt      (str/join " " [icon temp-f])
-      tltp     ""
-      cls      "weather"]
-  (-> {:text txt, :tooltip tltp, :class cls}
+      forecasts  (query-forecasts api-key location)]
+
+  (-> {:text    (get-current-forecast forecasts icon-color)
+       :tooltip (get-hourly-forecasts forecasts 6)
+       :class   "weather"}
       json/generate-string
       println))
