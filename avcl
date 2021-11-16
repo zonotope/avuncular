@@ -101,17 +101,24 @@
   [temp]
   (str temp "宅 "))
 
-(let [api-key  (:org.openweathermap/api-key config)
+(defn get-icon
+  [forecast]
+  (let [icon-code (-> forecast :weather first :icon)]
+    (get icons icon-code)))
+
+(defn get-fahrenheit
+  [forecast]
+  (-> forecast :temp kelvin->fahrenheit format-fahrenheit))
+
+(let [api-key    (:org.openweathermap/api-key config)
       icon-color (:icon-color config)
-      location (get-location)
-      forecasts (get-forecasts api-key location)
-      icon-code (-> forecasts :current :weather first :icon)
-      icon     (-> icons
-                   (get icon-code)
-                   (colorize icon-color))
-      temp-f   (-> forecasts :current :temp kelvin->fahrenheit format-fahrenheit)
       location   (query-location)
       forecasts  (query-forecasts api-key location)
+      current    (:current forecasts)
+      icon       (-> current
+                     get-icon
+                     (colorize icon-color))
+      temp-f   (get-fahrenheit current)
       txt      (str/join " " [icon temp-f])
       tltp     ""
       cls      "weather"]
