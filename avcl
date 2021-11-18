@@ -112,7 +112,7 @@
   (let [icon-code (-> forecast :weather first :icon)]
     (get icons icon-code)))
 
-(defn get-time
+(defn get-hour
   [forecast tz]
   (let [fmt (DateTimeFormatter/ofPattern "hh a")
         t   (-> forecast
@@ -135,12 +135,13 @@
   [forecasts n]
   (let [timezone (-> forecasts :timezone ZoneId/of)]
     (->> (:hourly forecasts)
+         (drop 1)
          (take n)
          (map (fn [h]
                 (let [temp (get-fahrenheit h)
                       icon (get-icon h)
-                      time (get-time h timezone)]
-                  (str/join " " [icon temp "|" time]))))
+                      hour (get-hour h timezone)]
+                  (str/join " " [icon temp "|" hour]))))
          (str/join \newline))))
 
 (let [api-key    (:org.openweathermap/api-key config)
