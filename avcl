@@ -1,14 +1,15 @@
 #! /usr/bin/env bb
 
-(require '[babashka.curl :as http])
 (require '[babashka.deps :as deps])
-(import '(java.time Instant ZonedDateTime ZoneId))
-(import '(java.time.format DateTimeFormatter))
 
 (deps/add-deps '{:deps {camel-snake-kebab/camel-snake-kebab
                         {:mvn/version "0.4.2"}}})
 
+(require '[babashka.curl :as http])
 (require '[camel-snake-kebab.core :refer [->kebab-case-keyword]])
+
+(import '(java.time Instant ZonedDateTime ZoneId))
+(import '(java.time.format DateTimeFormatter))
 
 (def config-base-dir
   (or (System/getenv "XDG_CONFIG_HOME")
@@ -128,8 +129,8 @@
         icon    (-> current
                     get-icon
                     (colorize icon-color))
-        temp-f  (get-fahrenheit current)]
-    (str/join " " [icon temp-f])))
+        temp    (get-fahrenheit current)]
+    (str/join " " [icon temp])))
 
 (defn get-hourly-forecasts
   [forecasts n]
