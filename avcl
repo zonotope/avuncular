@@ -1,29 +1,90 @@
 #! /usr/bin/env bb
 
-(require '[babashka.deps :as deps])
+(ns avuncular
+  (:require [babashka.fs :as fs]
+            [babashka.http-client :as http]
+            [clojure.edn :as edn]
+            [clojure.string :as str]
+            [cheshire.core :as json])
+  (:import (java.time Instant ZonedDateTime ZoneId)
+           (java.time.format DateTimeFormatter)))
 
-(deps/add-deps '{:deps {camel-snake-kebab/camel-snake-kebab
-                        {:mvn/version "0.4.2"}}})
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; http                                                                     ;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
-(require '[babashka.curl :as http])
-(require '[camel-snake-kebab.core :refer [->kebab-case-keyword]])
+(defn get-json-body
+  ([url]
+   (get-json-body url {}))
+  ([url query-params]
+   (-> url
+       (http/get {:query-params query-params})
+       :body
+       (json/parse-string true))))
 
-(import '(java.time Instant ZonedDateTime ZoneId))
-(import '(java.time.format DateTimeFormatter))
-
-(def config-base-dir
-  (or (System/getenv "XDG_CONFIG_HOME")
-      (str/join "/" [(System/getenv "HOME") ".config"])))
-
-(def config-path
-  (str/join "/" [config-base-dir "avuncular" "avcl.edn"]))
-
-(def config
-  (-> config-path slurp edn/read-string))
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; current location                                                         ;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (def location-endpoint "http://ip-api.com/json")
 
+(defn get-current-location
+  []
+  (get-json-body location-endpoint))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; forecast                                                                 ;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
 (def weather-endpoint "https://api.openweathermap.org/data/2.5/onecall")
+
+(defn weather-query-map
+  [location api-key]
+  (-> location
+      (select-keys [:lat :lon])
+      (assoc :appid api-key)))
+
+(defn get-forecasts
+  [location api-key]
+  (let [query-map (weather-query-map location api-key)]
+    (-> weather-endpoint
+        (http/get {:query-params query-map})
+        :body
+        (json/parse-string true))))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; temperature                                                              ;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(defn kelvin->celsius
+  [temp]
+  (- temp 273.15))
+
+(defn celsius->fahrenheit
+  [temp]
+  (-> temp
+      (* 9)
+      (/ 5)
+      (+ 32)
+      Math/round))
+
+(defn kelvin->fahrenheit
+  [temp]
+  (-> temp
+      kelvin->celsius
+      celsius->fahrenheit))
+
+(defn format-fahrenheit
+  [temp]
+  (str temp "󰔅 "))
+
+(defn get-fahrenheit
+  [forecast]
+  (-> forecast :temp kelvin->fahrenheit format-fahrenheit))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; icons                                                                    ;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (def icons
   {"01d" " "
@@ -45,73 +106,29 @@
    "50d" " "
    "50n" " "})
 
-(defn map->query-str
-  [m]
-  (->> m
-       (reduce (fn [params [k v]]
-                 (let [p (str/join "=" [(name k) v])]
-                   (conj params p)))
-               [])
-       (str/join "&")))
-
-(defn ->weather-url
-  [api-key location]
-  (let [query-str (-> location
-                      (select-keys [:lat :lon])
-                      (assoc :appid api-key)
-                      map->query-str)]
-    (str/join "?" [weather-endpoint query-str])))
-
-(defn get-json-body
-  [url]
-  (-> url
-      http/get
-      :body
-      (json/parse-string ->kebab-case-keyword)))
-
-(defn query-location
-  []
-  (get-json-body location-endpoint))
-
-(defn query-forecasts
-  [api-key location]
-  (let [url (->weather-url api-key location)]
-    (get-json-body url)))
-
-(defn kelvin->celsius
-  [temp]
-  (- temp 273.15))
-
-(defn celsius->fahrenheit
-  [temp]
-  (-> temp
-      (* 9)
-      (/ 5)
-      (+ 32)
-      Math/round))
-
-(defn kelvin->fahrenheit
-  [temp]
-  (-> temp
-      kelvin->celsius
-      celsius->fahrenheit))
-
 (defn colorize
   [s color]
   (format "<span color=\"%s\">%s</span>" color s))
 
-(defn format-fahrenheit
-  [temp]
-  (str temp "宅 "))
-
-(defn get-fahrenheit
-  [forecast]
-  (-> forecast :temp kelvin->fahrenheit format-fahrenheit))
-
 (defn get-icon
-  [forecast]
-  (let [icon-code (-> forecast :weather first :icon)]
-    (get icons icon-code)))
+  ([forecast]
+   (let [icon-code (-> forecast :weather first :icon)]
+     (get icons icon-code)))
+  ([forecast color]
+   (-> forecast
+       get-icon
+       (colorize color))))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; formatting                                                               ;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(defn get-current-forecast
+  [forecasts icon-color]
+  (let [current (:current forecasts)
+        icon    (get-icon current icon-color)
+        temp    (get-fahrenheit current)]
+    (str/join " " [icon temp])))
 
 (defn get-hour
   [forecast tz]
@@ -122,15 +139,6 @@
                 Instant/ofEpochMilli
                 (ZonedDateTime/ofInstant tz))]
     (.format t fmt)))
-
-(defn get-current-forecast
-  [forecasts icon-color]
-  (let [current (:current forecasts)
-        icon    (-> current
-                    get-icon
-                    (colorize icon-color))
-        temp    (get-fahrenheit current)]
-    (str/join " " [icon temp])))
 
 (defn get-hourly-forecasts
   [forecasts n]
@@ -145,13 +153,33 @@
                   (str/join " " [icon temp "|" hour]))))
          (str/join \newline))))
 
-(let [api-key    (:org.openweathermap/api-key config)
-      icon-color (:icon-color config)
-      location   (query-location)
-      forecasts  (query-forecasts api-key location)]
+(defn print-forecast
+  [api-key icon-color]
+  (let [location   (get-current-location)
+        forecasts  (get-forecasts location api-key)]
+      (-> {:text    (get-current-forecast forecasts icon-color)
+           :tooltip (get-hourly-forecasts forecasts 6)
+           :class   "weather"}
+          json/generate-string
+          println)))
 
-  (-> {:text    (get-current-forecast forecasts icon-color)
-       :tooltip (get-hourly-forecasts forecasts 6)
-       :class   "weather"}
-      json/generate-string
-      println))
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; command line                                                             ;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(def app-name "avuncular")
+(def config-file "avcl.edn")
+
+(def config
+  (-> (fs/xdg-config-home app-name)
+      (fs/file config-file)
+      slurp
+      edn/read-string))
+
+(let [api-key         (:org.openweathermap/api-key config)
+      icon-color      (:avuncular.icon/color config)
+      update-interval (:avuncular.run/interval config)]
+  (loop []
+    (print-forecast api-key icon-color)
+    (Thread/sleep (* update-interval 60000))
+    (recur)))
