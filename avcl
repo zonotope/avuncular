@@ -4,9 +4,10 @@
   (:require [babashka.fs :as fs]
             [babashka.http-client :as http]
             [clojure.edn :as edn]
+            [clojure.set :refer [rename-keys]]
             [clojure.string :as str]
             [cheshire.core :as json])
-  (:import (java.time Instant ZonedDateTime ZoneId)
+  (:import (java.time LocalDateTime ZoneId)
            (java.time.format DateTimeFormatter)))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -30,135 +31,256 @@
 
 (defn get-current-location
   []
-  (get-json-body location-endpoint))
+  (-> location-endpoint
+      get-json-body
+      (select-keys [:timezone :country :countryCode :region :regionName :city
+                    :zip :lat :lon :status])
+      (rename-keys {:regionName  :region-name
+                    :countryCode :country-code
+                    :lat         :latitude
+                    :lon         :longitude})))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; forecast                                                                 ;;
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
-(def weather-endpoint "https://api.openweathermap.org/data/2.5/onecall")
+(def weather-endpoint "https://api.open-meteo.com/v1/forecast")
+
+(defn attributes->query-val
+  [attrs]
+  (str/join "," attrs))
+
+(def hourly-attributes
+  ["temperature_2m"
+   "apparent_temperature"
+   "is_day"
+   "precipitation_probability"
+   "weather_code"])
+
+(def hourly-query-val
+  (attributes->query-val hourly-attributes))
+
+(def current-attributes
+  ["temperature_2m"
+   "apparent_temperature"
+   "is_day"
+   "precipitation"
+   "weather_code"])
+
+(def current-query-val
+  (attributes->query-val current-attributes))
+
+(def temperature-unit
+  "fahrenheit")
+
+(def precipitation-unit
+  "inch")
+
+(def wind-speed-unit
+  "mph")
 
 (defn weather-query-map
-  [location api-key]
+  [location]
   (-> location
-      (select-keys [:lat :lon])
-      (assoc :appid api-key)))
-
-(defn get-forecasts
-  [location api-key]
-  (let [query-map (weather-query-map location api-key)]
-    (-> weather-endpoint
-        (http/get {:query-params query-map})
-        :body
-        (json/parse-string true))))
-
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;; temperature                                                              ;;
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-
-(defn kelvin->celsius
-  [temp]
-  (- temp 273.15))
-
-(defn celsius->fahrenheit
-  [temp]
-  (-> temp
-      (* 9)
-      (/ 5)
-      (+ 32)
-      Math/round))
-
-(defn kelvin->fahrenheit
-  [temp]
-  (-> temp
-      kelvin->celsius
-      celsius->fahrenheit))
-
-(defn format-fahrenheit
-  [temp]
-  (str temp "󰔅 "))
-
-(defn get-fahrenheit
-  [forecast]
-  (-> forecast :temp kelvin->fahrenheit format-fahrenheit))
-
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;; icons                                                                    ;;
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+      (select-keys [:latitude :longitude :timezone])
+      (assoc :hourly hourly-query-val
+             :forecast_hours 6
+             :current current-query-val
+             :temperature_unit temperature-unit
+             :precipitation_unit precipitation-unit
+             :wind_speed_unit wind-speed-unit)))
 
 (def icons
-  {"01d" " "
-   "01n" " "
-   "02d" " "
-   "02n" " "
-   "03d" " "
-   "03n" " "
-   "04d" " "
-   "04n" " "
-   "09d" " "
-   "09n" " "
-   "10d" " "
-   "10n" " "
-   "11d" " "
-   "11n" " "
-   "13d" " "
-   "13n" " "
-   "50d" " "
-   "50n" " "})
-
-(defn colorize
-  [s color]
-  (format "<span color=\"%s\">%s</span>" color s))
+  {"0d" " "
+   "0n" " "
+   "1d" " "
+   "1n" " "
+   "2d" " "
+   "2n" " "
+   "3d" " "
+   "3n" " "
+   "45d" " "
+   "45n" " "
+   "48d" " "
+   "48n" " "
+   "51d" " "
+   "51n" " "
+   "53d" " "
+   "53n" " "
+   "55d" " "
+   "55n" " "
+   "56d" " "
+   "56n" " "
+   "57d" " "
+   "57n" " "
+   "61d" " "
+   "61n" " "
+   "63d" " "
+   "63n" " "
+   "65d" " "
+   "65n" " "
+   "66d" " "
+   "66n" " "
+   "67d" " "
+   "67n" " "
+   "71d" " "
+   "71n" " "
+   "73d" " "
+   "73n" " "
+   "75d" " "
+   "75n" " "
+   "77d" " "
+   "77n" " "
+   "80d" " "
+   "80n" " "
+   "81d" " "
+   "81n" " "
+   "82d" " "
+   "82n" " "
+   "85d" " "
+   "85n" " "
+   "86d" " "
+   "86n" " "
+   "95d" " "
+   "95n" " "
+   "96d" " "
+   "96n" " "
+   "99d" " "
+   "99n" " "})
 
 (defn get-icon
-  ([forecast]
-   (let [icon-code (-> forecast :weather first :icon)]
-     (get icons icon-code)))
-  ([forecast color]
-   (-> forecast
-       get-icon
-       (colorize color))))
+  [weather-code period]
+  (get icons (str weather-code period)))
+
+(defn convert-period
+  [period]
+  (if (zero? period)
+    "n"
+    "d"))
+
+(defn resolve-icon
+  [{:keys [weather-code period] :as forecast}]
+  (let [period-char (convert-period period)
+        icon        (get-icon weather-code period-char)]
+    (-> forecast
+        (assoc :icon icon)
+        (dissoc :weather-code :period))))
+
+(defn round-temperature
+  [forecast]
+  (update forecast :temp Math/round))
+
+(defn convert-forecast-keys
+  [forecast]
+  (-> forecast
+      (rename-keys {:temperature_2m            :temp
+                    :apparent_temperature      :apparent-temp
+                    :is_day                    :period
+                    :precipitation_probability :precip-chance
+                    :weather_code              :weather-code})
+      (select-keys [:time :temp :apparent-temp :period :precip-chance :weather-code])))
+
+(defn convert-current-forecast
+  [forecast]
+  (-> forecast
+      convert-forecast-keys
+      resolve-icon
+      round-temperature))
+
+(defn merge-hours
+  [hourly]
+  (mapv (fn [time temp app-temp period precip code]
+          {:time          time,
+           :temp          temp,
+           :apparent-temp app-temp,
+           :period        period,
+           :precip-chance precip
+           :weather-code  code})
+        (:time hourly)
+        (:temp hourly)
+        (:apparent-temp hourly)
+        (:period hourly)
+        (:precip-chance hourly)
+        (:weather-code hourly)))
+
+(defn convert-hourly-forecast
+  [forecast]
+  (let [hours (-> forecast convert-forecast-keys merge-hours)]
+    (->> hours
+         (map resolve-icon)
+         (map round-temperature)
+         vec)))
+
+(defn get-forecasts
+  [location]
+  (let [query-params (weather-query-map location)]
+    (-> weather-endpoint
+        (get-json-body query-params)
+        (select-keys [:current :hourly])
+        (update :current convert-current-forecast)
+        (update :hourly convert-hourly-forecast))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; formatting                                                               ;;
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
-(defn get-current-forecast
-  [forecasts icon-color]
-  (let [current (:current forecasts)
-        icon    (get-icon current icon-color)
-        temp    (get-fahrenheit current)]
-    (str/join " " [icon temp])))
+(defn colorize
+  [s color]
+  (format "<span color=\"%s\">%s</span>" color s))
 
-(defn get-hour
-  [forecast tz]
-  (let [fmt (DateTimeFormatter/ofPattern "hh a")
-        t   (-> forecast
-                :dt
-                (* 1000)
-                Instant/ofEpochMilli
-                (ZonedDateTime/ofInstant tz))]
-    (.format t fmt)))
+(defn format-fahrenheit
+  [forecast]
+  (-> forecast
+      :temp
+      (str "󰔅 ")))
 
-(defn get-hourly-forecasts
-  [forecasts n]
-  (let [timezone (-> forecasts :timezone ZoneId/of)]
-    (->> (:hourly forecasts)
-         (drop 1)
-         (take n)
-         (map (fn [h]
-                (let [temp (get-fahrenheit h)
-                      icon (get-icon h)
-                      hour (get-hour h timezone)]
-                  (str/join " " [icon temp "|" hour]))))
-         (str/join \newline))))
+(defn format-current-forecast
+  [icon-color forecasts]
+  (let [{:keys [icon] :as forecast} (:current forecasts)
+        colored-icon                (colorize icon icon-color)
+        temp                        (format-fahrenheit forecast)]
+    (str/join " " [colored-icon temp])))
+
+(defn get-timezone
+  [location]
+  (-> location :timezone ZoneId/of))
+
+(defn get-local-time
+  [forecast]
+  (-> forecast :time LocalDateTime/parse))
+
+(defn get-time
+  [forecast location]
+  (let [local-time (get-local-time forecast)
+        tz         (get-timezone location)]
+    (.atZone local-time tz)))
+
+(def hour-formatter
+  (DateTimeFormatter/ofPattern "hh a"))
+
+(defn format-hour
+  [forecast location]
+  (let [t (get-time forecast location)]
+    (.format t hour-formatter)))
+
+(defn format-hourly-forecast
+  [location {:keys [icon] :as forecast}]
+  (let [temp (format-fahrenheit forecast)
+        hour (format-hour forecast location)]
+    (str/join " " [icon temp "|" hour])))
+
+(defn format-hourly-forecasts
+  [location forecasts]
+  (->> (:hourly forecasts)
+       (map (partial format-hourly-forecast location))
+       (str/join \newline)))
 
 (defn print-forecast
-  [api-key icon-color]
+  [icon-color]
   (let [location   (get-current-location)
-        forecasts  (get-forecasts location api-key)]
-      (-> {:text    (get-current-forecast forecasts icon-color)
-           :tooltip (get-hourly-forecasts forecasts 6)
+        forecasts  (get-forecasts location)]
+      (-> {:text    (format-current-forecast icon-color forecasts)
+           :tooltip (format-hourly-forecasts location forecasts)
            :class   "weather"}
           json/generate-string
           println)))
@@ -176,10 +298,9 @@
       slurp
       edn/read-string))
 
-(let [api-key         (:org.openweathermap/api-key config)
-      icon-color      (:avuncular.icon/color config)
+(let [icon-color      (:avuncular.icon/color config)
       update-interval (:avuncular.run/interval config)]
   (loop []
-    (print-forecast api-key icon-color)
+    (print-forecast icon-color)
     (Thread/sleep (* update-interval 60000))
     (recur)))
